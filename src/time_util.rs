@@ -17,6 +17,10 @@ pub fn get_current_time() -> String {
     
     hour_str
 }
+pub fn is_on_the_hour() -> bool {
+    let now = Local::now();
+    now.minute() == 0 && now.second() == 0
+}
 
 pub fn get_current_hour() -> u32 {
     let local_time = Local::now();
