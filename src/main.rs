@@ -1,13 +1,15 @@
+use async_std::task;
+use encoding_rs::*;
 use fltk::{
-    app, enums::Color, enums::Font, frame::Frame, image::SharedImage, prelude::*, text::TextBuffer,
-    text::TextDisplay, window::Window,
+    app, enums::Color, enums::Font, enums::*, frame::Frame, image::SharedImage, prelude::*,
+    text::TextBuffer, text::TextDisplay, window::Window,
 };
 use fltk::{app::*, button::*, enums::*, image::*, prelude::*, window::*};
-use std::error::Error;
-
-use async_std::task;
+use fltk::{prelude::*, *};
 use rodio::{Decoder, Sink};
 use std::env;
+use std::error::Error;
+use std::io::Read;
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
@@ -21,15 +23,23 @@ async fn main() {
     let app = App::default().with_scheme(app::Scheme::Gleam);
     let mut wind = Window::new(100, 100, 400, 800, "Async FLTK Example");
 
+    //台词框
+    let mut buffer = TextBuffer::default();
+    let mut text_display = TextDisplay::new(320, 20, 90, 100, "");
+    text_display.set_buffer(Some(buffer.clone()));
+    text_display.set_text_color(Color::Red);
+    text_display.set_text_font(Font::HelveticaBold);
+    text_display.set_text_size(12);
+    text_display.set_frame(FrameType::NoBox);
+    text_display.wrap_mode(fltk::text::WrapMode::AtBounds, 100);
+
     //背景图加载
     load_image_into_frame("./pic/setpainting_0.png");
-    display_words("Hello, world!");
 
     //音量按钮
     let mut button = Button::new(300, 700, 80, 50, "音量");
     button.set_color(Color::from_rgb(0, 180, 255));
     button.set_label_color(Color::White);
-
     let volume: Arc<Mutex<f32>> = Arc::new(Mutex::new(0.5));
     button.set_callback({
         let volume = Arc::clone(&volume);
@@ -43,25 +53,29 @@ async fn main() {
             drop(volume);
             println!("Volume1: {}", volume1);
 
-            task::spawn(async move {
-                // Your asynchronous code her
-                if let Ok(current_dir) = env::current_dir() {
-                    println!("Current directory: {:?}", current_dir);
-                } else {
-                    eprintln!("Failed to get current directory");
-                }
+            task::spawn({
+                let mut buffer = buffer.clone();
+                let mut text_display = text_display.clone();
+                async move {
+                    // Your asynchronous code her
+                    if let Ok(current_dir) = env::current_dir() {
+                        println!("Current directory: {:?}", current_dir);
+                    } else {
+                        eprintln!("Failed to get current directory");
+                    }
 
-                let current_time = time_util::get_current_hour();
-                let mp3_path = time_util::format_mp3_path(current_time);
-                // Adjust volume based on button press
-                println!("Volume: {}", volume1);
-                play_mp3_file(&mp3_path, volume1).await;
+                    let current_time = time_util::get_current_hour();
+                    display_words(current_time, &mut buffer, &mut text_display);
+                    let mp3_path = time_util::format_mp3_path(current_time);
+                    play_mp3_file(&mp3_path, volume1).await;
+                    // Clear the text
+                    buffer.set_text("");
+                }
             });
         }
     });
 
     //定时报时后台线程
-    // let volume1: f32 = 1.0; // Clone volume for async block
     let volume_clone = Arc::clone(&volume);
     let volume1 = *volume_clone.lock().unwrap();
     let report_task: tokio::task::JoinHandle<()> = tokio::spawn(report_punctually(3600, volume1));
@@ -72,17 +86,29 @@ async fn main() {
     app.run().unwrap();
 }
 
-fn display_words(words: &str) {
-    let mut buffer = TextBuffer::default();
-    buffer.set_text(words);
+fn display_words(hour: u32, buffer: &mut TextBuffer, text_display: &mut TextDisplay) {
+    let last_string = format!("{:02}", hour);
+    let formatted_path = format!("./words/0/{}.txt", last_string);
 
-    let mut text_display = TextDisplay::new(300, 50, 80, 80, "");
-    text_display.set_buffer(Some(buffer));
+    //GBK to utf-8
+    let mut file = match File::open(&formatted_path) {
+        Ok(file) => file,
+        Err(e) => {
+            eprintln!("Failed to open file: {}", e);
+            return;
+        }
+    };
 
-    text_display.set_text_color(Color::Red);
-    text_display.set_text_font(Font::HelveticaBold);
-    text_display.set_text_size(12);
-    text_display.set_frame(FrameType::NoBox);
+    let mut bytes = Vec::new();
+    if let Err(e) = file.read_to_end(&mut bytes) {
+        eprintln!("Failed to read file: {}", e);
+        return;
+    }
+
+    let (cow, _encoding_used, _had_errors) = GBK.decode(&bytes);
+
+    buffer.set_text(&cow);
+    text_display.set_buffer(Some(buffer.clone()));
 }
 
 async fn report_punctually(interval_seconds: u64, volume: f32) {
@@ -93,8 +119,6 @@ async fn report_punctually(interval_seconds: u64, volume: f32) {
         println!("Report: Something happened!");
         // Add your reporting logic here
         if time_util::is_on_the_hour() {
-            println!("Report: 1");
-
             let current_time = time_util::get_current_hour();
             let mp3_path = time_util::format_mp3_path(current_time);
             play_mp3_file(&mp3_path, volume).await;
